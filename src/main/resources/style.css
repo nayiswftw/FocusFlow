@@ -1,0 +1,19 @@
+:root {
+    -fx-background: #10121B;
+    -fx-base: #10121B;
+    -fx-accent: #A78BFA;
+    -fx-focus-color: #A78BFA;
+    -fx-text-base-color: white;
+}
+
+.button {
+    -fx-cursor: hand;
+}
+
+.scroll-pane {
+    -fx-background-color: transparent;
+}
+
+.progress-bar {
+    -fx-accent: #A78BFA;
+}
