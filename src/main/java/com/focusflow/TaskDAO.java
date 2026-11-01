@@ -7,7 +7,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class TaskDAO {
 
@@ -25,7 +27,7 @@ public class TaskDAO {
             ps.executeUpdate();
 
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw databaseError("Could not add task.", e);
         }
     }
 
@@ -47,7 +49,7 @@ public class TaskDAO {
             }
 
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw databaseError("Could not load tasks.", e);
         }
 
         return tasks;
@@ -67,7 +69,7 @@ public class TaskDAO {
             ps.executeUpdate();
 
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw databaseError("Could not complete task.", e);
         }
     }
 
@@ -81,7 +83,7 @@ public class TaskDAO {
             ps.executeUpdate();
 
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw databaseError("Could not delete task.", e);
         }
     }
 
@@ -101,8 +103,7 @@ public class TaskDAO {
             return rs.next() ? rs.getInt(1) : 0;
 
         } catch (SQLException e) {
-            e.printStackTrace();
-            return 0;
+            throw databaseError("Could not count tasks.", e);
         }
     }
 
@@ -120,7 +121,7 @@ public class TaskDAO {
             ps.executeUpdate();
 
         } catch (SQLException e) {
-            e.printStackTrace();
+            throw databaseError("Could not save study session.", e);
         }
     }
 
@@ -141,8 +142,7 @@ public class TaskDAO {
             }
 
         } catch (SQLException e) {
-            e.printStackTrace();
-            return 0;
+            throw databaseError("Could not load today's study time.", e);
         }
     }
 
@@ -156,8 +156,85 @@ public class TaskDAO {
             return rs.next() ? rs.getInt(1) : 0;
 
         } catch (SQLException e) {
-            e.printStackTrace();
-            return 0;
+            throw databaseError("Could not load total study time.", e);
         }
+    }
+
+    public Map<LocalDate, Integer> getStudyMinutesByDate(LocalDate startDate, LocalDate endDate) {
+        String sql = """
+            SELECT session_date, COALESCE(SUM(duration), 0)
+            FROM sessions
+            WHERE session_date BETWEEN ? AND ?
+            GROUP BY session_date
+            ORDER BY session_date
+        """;
+        Map<LocalDate, Integer> studyMinutes = new LinkedHashMap<>();
+
+        try (Connection con = Database.connect();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+
+            ps.setString(1, startDate.toString());
+            ps.setString(2, endDate.toString());
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    studyMinutes.put(
+                        LocalDate.parse(rs.getString(1)),
+                        rs.getInt(2)
+                    );
+                }
+            }
+
+            return studyMinutes;
+        } catch (SQLException e) {
+            throw databaseError("Could not load weekly study activity.", e);
+        }
+    }
+
+    public int getCurrentStudyStreak() {
+        LocalDate today = LocalDate.now();
+        LocalDate firstDate = today.minusYears(100);
+        String sql = """
+            SELECT DISTINCT session_date
+            FROM sessions
+            WHERE session_date >= ?
+            ORDER BY session_date DESC
+        """;
+
+        try (Connection con = Database.connect();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+
+            ps.setString(1, firstDate.toString());
+
+            try (ResultSet rs = ps.executeQuery()) {
+                LocalDate expectedDate = today;
+                List<LocalDate> dates = new ArrayList<>();
+
+                while (rs.next()) {
+                    dates.add(LocalDate.parse(rs.getString(1)));
+                }
+
+                if (dates.isEmpty() || !dates.get(0).equals(today)) {
+                    expectedDate = today.minusDays(1);
+                }
+
+                int streak = 0;
+                for (LocalDate date : dates) {
+                    if (date.equals(expectedDate)) {
+                        streak++;
+                        expectedDate = expectedDate.minusDays(1);
+                    } else if (date.isBefore(expectedDate)) {
+                        break;
+                    }
+                }
+                return streak;
+            }
+        } catch (SQLException e) {
+            throw databaseError("Could not calculate the study streak.", e);
+        }
+    }
+
+    private IllegalStateException databaseError(String message, SQLException cause) {
+        return new IllegalStateException(message, cause);
     }
 }

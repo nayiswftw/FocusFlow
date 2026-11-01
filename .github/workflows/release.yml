@@ -1,0 +1,82 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build FocusFlow
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Build project
+        run: mvn --batch-mode --no-transfer-progress clean package
+
+      - name: Upload application package
+        uses: actions/upload-artifact@v4
+        with:
+          name: focusflow-build
+          path: |
+            target/*.jar
+            !target/original-*.jar
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download application package
+        uses: actions/download-artifact@v4
+        with:
+          name: focusflow-build
+          path: release/FocusFlow
+
+      - name: Prepare release archive
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p release/FocusFlow
+          cp -r src release/FocusFlow/
+          cp pom.xml README.md LICENSE .gitignore release/FocusFlow/
+          if [ -d docs ]; then
+            cp -r docs release/FocusFlow/
+          fi
+          if ! find release/FocusFlow -maxdepth 1 -type f -name '*.jar' -print -quit | grep -q .; then
+            echo "Maven build did not produce an application JAR." >&2
+            exit 1
+          fi
+          cd release
+          zip -r "FocusFlow-${RELEASE_TAG}.zip" FocusFlow
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FocusFlow ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: release/FocusFlow-${{ github.ref_name }}.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

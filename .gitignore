@@ -1,0 +1,5 @@
+target/
+focusflow.db
+*.db-journal
+.idea/
+*.iml

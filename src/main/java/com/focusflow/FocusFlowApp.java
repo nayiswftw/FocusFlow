@@ -6,6 +6,10 @@ import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.chart.BarChart;
+import javafx.scene.chart.CategoryAxis;
+import javafx.scene.chart.NumberAxis;
+import javafx.scene.chart.XYChart;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
@@ -20,15 +24,28 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
-import javafx.scene.paint.Color;
-import javafx.scene.text.Font;
 import javafx.stage.Stage;
 import javafx.util.Duration;
+
+import java.awt.AWTException;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.HeadlessException;
+import java.awt.SystemTray;
+import java.awt.TrayIcon;
+import java.awt.image.BufferedImage;
+import java.time.LocalDate;
+import java.time.format.TextStyle;
+import java.util.Locale;
+import java.util.Map;
+import java.util.function.Supplier;
 
 public class FocusFlowApp extends Application {
 
     private final TaskDAO dao = new TaskDAO();
 
+    private BorderPane root;
+    private Button activeNavButton;
     private Label totalTasksLabel;
     private Label completedLabel;
     private Label studyLabel;
@@ -45,6 +62,7 @@ public class FocusFlowApp extends Application {
     private boolean focusMode = true;
 
     private Button startButton;
+    private TrayIcon trayIcon;
 
     private static final int FOCUS_MINUTES = 25;
     private static final int BREAK_MINUTES = 5;
@@ -54,62 +72,71 @@ public class FocusFlowApp extends Application {
     public void start(Stage stage) {
         Database.initialize();
 
-        BorderPane root = new BorderPane();
+        root = new BorderPane();
+        root.getStyleClass().add("app-shell");
         root.setLeft(createSidebar());
-
-        VBox dashboard = createDashboard();
-        root.setCenter(dashboard);
-        root.setStyle("-fx-background-color: #10121B;");
+        root.setCenter(createDashboard());
 
         Scene scene = new Scene(root, 1100, 750);
         scene.getStylesheets().add(getClass().getResource("/style.css").toExternalForm());
 
         stage.setTitle("FocusFlow - Productivity Tracker");
-        stage.setMinWidth(850);
-        stage.setMinHeight(650);
+        stage.setMinWidth(1000);
+        stage.setMinHeight(680);
         stage.setScene(scene);
         stage.show();
 
+        initializeDesktopNotifications();
         refreshDashboard();
     }
 
     private VBox createSidebar() {
         VBox sidebar = new VBox(22);
-        sidebar.setPadding(new Insets(30, 20, 30, 20));
-        sidebar.setPrefWidth(220);
-        sidebar.setStyle("-fx-background-color: #181B28;");
+        sidebar.setPadding(new Insets(26, 16, 20, 16));
+        sidebar.setPrefWidth(228);
+        sidebar.setMinWidth(228);
+        sidebar.getStyleClass().add("sidebar");
 
-        Label logo = new Label("◈ FocusFlow");
-        logo.setFont(Font.font("Arial", 24));
-        logo.setTextFill(Color.web("#A78BFA"));
+        Label brandMark = new Label("F");
+        brandMark.getStyleClass().add("brand-mark");
+        Label logo = new Label("FocusFlow");
+        logo.getStyleClass().add("brand-name");
+        HBox brand = new HBox(10, brandMark, logo);
+        brand.setAlignment(Pos.CENTER_LEFT);
 
-        Label subtitle = new Label("STUDY SMARTER");
-        subtitle.setTextFill(Color.GRAY);
+        Label subtitle = new Label("PERSONAL WORKSPACE");
+        subtitle.getStyleClass().add("sidebar-caption");
 
-        Button dashboardBtn = navButton("▦  Dashboard");
-        Button tasksBtn = navButton("✓  My Tasks");
-        Button timerBtn = navButton("◷  Focus Timer");
-        Button analyticsBtn = navButton("▤  Analytics");
+        Label workspaceLabel = new Label("WORKSPACE");
+        workspaceLabel.getStyleClass().add("nav-section-label");
+        Button dashboardBtn = navButton("Overview");
+        Button tasksBtn = navButton("My tasks");
+        Button timerBtn = navButton("Focus timer");
+        Button analyticsBtn = navButton("Analytics");
+        setActiveNavigation(dashboardBtn);
 
-        dashboardBtn.setOnAction(e -> showMessage("You are already on Dashboard."));
-        tasksBtn.setOnAction(e -> {
-            refreshTasks();
-            showMessage("Your task list is displayed on the dashboard.");
-        });
-        timerBtn.setOnAction(e -> showMessage("Use the Focus Timer panel on the dashboard."));
-        analyticsBtn.setOnAction(e -> showAnalytics());
+        dashboardBtn.setOnAction(e -> navigateTo(dashboardBtn, this::createDashboard));
+        tasksBtn.setOnAction(e -> navigateTo(tasksBtn, this::createTasksPage));
+        timerBtn.setOnAction(e -> navigateTo(timerBtn, this::createTimerPage));
+        analyticsBtn.setOnAction(e -> navigateTo(analyticsBtn, this::createAnalyticsPage));
 
         Region spacer = new Region();
         VBox.setVgrow(spacer, Priority.ALWAYS);
 
-        Label footer = new Label("FocusFlow v1.0");
-        footer.setTextFill(Color.GRAY);
+        Label avatar = new Label("FF");
+        avatar.getStyleClass().add("avatar");
+        Label footer = new Label("Local workspace");
+        footer.getStyleClass().add("sidebar-footer-text");
+        HBox account = new HBox(10, avatar, footer);
+        account.setAlignment(Pos.CENTER_LEFT);
+        account.getStyleClass().add("sidebar-account");
 
         sidebar.getChildren().addAll(
-            logo, subtitle,
+            brand, subtitle,
+            workspaceLabel,
             dashboardBtn, tasksBtn,
             timerBtn, analyticsBtn,
-            spacer, footer
+            spacer, account
         );
 
         return sidebar;
@@ -119,45 +146,63 @@ public class FocusFlowApp extends Application {
         Button button = new Button(text);
         button.setMaxWidth(Double.MAX_VALUE);
         button.setAlignment(Pos.CENTER_LEFT);
-        button.setPadding(new Insets(13));
-        button.setStyle("""
-            -fx-background-color: #242839;
-            -fx-text-fill: white;
-            -fx-background-radius: 9;
-            -fx-font-size: 14px;
-            -fx-cursor: hand;
-        """);
+        button.getStyleClass().add("nav-button");
         return button;
     }
 
+    private void navigateTo(Button navigationButton, Supplier<VBox> pageFactory) {
+        try {
+            setActiveNavigation(navigationButton);
+            root.setCenter(pageFactory.get());
+            if ("Overview".equals(navigationButton.getText())) {
+                refreshDashboard();
+            }
+        } catch (IllegalStateException e) {
+            showDatabaseError(e);
+        }
+    }
+
+    private void setActiveNavigation(Button navigationButton) {
+        if (activeNavButton != null) {
+            activeNavButton.getStyleClass().remove("nav-button-active");
+        }
+        activeNavButton = navigationButton;
+        if (!navigationButton.getStyleClass().contains("nav-button-active")) {
+            navigationButton.getStyleClass().add("nav-button-active");
+        }
+    }
+
     private VBox createDashboard() {
-        VBox content = new VBox(22);
-        content.setPadding(new Insets(30));
+        VBox content = new VBox(20);
+        content.setPadding(new Insets(34, 36, 36, 36));
+        content.getStyleClass().add("dashboard-content");
 
-        Label heading = new Label("Welcome to FocusFlow 👋");
-        heading.setFont(Font.font("Arial", 27));
-        heading.setTextFill(Color.WHITE);
+        Label heading = new Label("Dashboard");
+        heading.getStyleClass().add("page-title");
 
-        Label description = new Label("Stay focused. Track progress. Achieve more.");
-        description.setTextFill(Color.LIGHTGRAY);
+        Label description = new Label("A clear view of your work and focus for today.");
+        description.getStyleClass().add("page-description");
+        VBox pageHeader = new VBox(6, heading, description);
+        pageHeader.getStyleClass().add("page-header");
 
-        HBox stats = new HBox(15);
+        HBox stats = new HBox(14);
+        stats.getStyleClass().add("stats-row");
 
         totalTasksLabel = new Label("0");
         completedLabel = new Label("0");
         studyLabel = new Label("0 min");
 
         stats.getChildren().addAll(
-            statCard("Total Tasks", totalTasksLabel, "#818CF8"),
-            statCard("Completed", completedLabel, "#34D399"),
-            statCard("Study Today", studyLabel, "#FBBF24")
+            statCard("Total Tasks", totalTasksLabel),
+            statCard("Completed", completedLabel),
+            statCard("Study Today", studyLabel)
         );
 
         VBox timerCard = createTimerCard();
 
         HBox lowerSection = new HBox(20);
 
-        VBox tasksCard = createTasksCard();
+        VBox tasksCard = createTasksCard(220);
         VBox analyticsCard = createGoalCard();
 
         HBox.setHgrow(tasksCard, Priority.ALWAYS);
@@ -166,8 +211,7 @@ public class FocusFlowApp extends Application {
         lowerSection.getChildren().addAll(tasksCard, analyticsCard);
 
         content.getChildren().addAll(
-            heading,
-            description,
+            pageHeader,
             stats,
             timerCard,
             lowerSection
@@ -175,11 +219,7 @@ public class FocusFlowApp extends Application {
 
         ScrollPane scroll = new ScrollPane(content);
         scroll.setFitToWidth(true);
-        scroll.setStyle("""
-            -fx-background: #10121B;
-            -fx-background-color: #10121B;
-            -fx-border-color: transparent;
-        """);
+        scroll.getStyleClass().add("dashboard-scroll");
 
         VBox wrapper = new VBox(scroll);
         VBox.setVgrow(scroll, Priority.ALWAYS);
@@ -187,20 +227,150 @@ public class FocusFlowApp extends Application {
         return wrapper;
     }
 
-    private VBox statCard(String title, Label value, String color) {
-        VBox card = new VBox(12);
-        card.setPadding(new Insets(20));
-        card.setPrefWidth(220);
-        card.setStyle("""
-            -fx-background-color: #1C2030;
-            -fx-background-radius: 14;
-        """);
+    private VBox createTasksPage() {
+        VBox page = createPageFrame(
+            "My tasks",
+            "Plan your next study session and keep your priorities clear."
+        );
+        VBox tasksCard = createTasksCard(460);
+        VBox.setVgrow(tasksCard, Priority.ALWAYS);
+        page.getChildren().add(tasksCard);
+        return wrapPage(page);
+    }
+
+    private VBox createTimerPage() {
+        VBox page = createPageFrame(
+            "Focus timer",
+            "Work in focused intervals, then take a restorative break."
+        );
+
+        VBox timerCard = createTimerCard();
+        timerCard.getStyleClass().add("timer-card-large");
+
+        VBox guide = new VBox(8);
+        guide.setPadding(new Insets(20));
+        guide.getStyleClass().add("content-card");
+        Label guideTitle = new Label("Your focus cycle");
+        guideTitle.getStyleClass().add("card-title");
+        Label guideText = new Label(
+            "Focus for 25 minutes, then switch to a 5-minute break. " +
+            "Completed focus sessions are saved to your study history."
+        );
+        guideText.getStyleClass().add("page-description");
+        guideText.setWrapText(true);
+        guide.getChildren().addAll(guideTitle, guideText);
+
+        page.getChildren().addAll(timerCard, guide);
+        return wrapPage(page);
+    }
+
+    private VBox createAnalyticsPage() {
+        VBox page = createPageFrame(
+            "Analytics",
+            "Review your study habits and progress over time."
+        );
+
+        int total = dao.getTotalTasks();
+        int completed = dao.getCompletedTasks();
+        int today = dao.getTodayStudyMinutes();
+        int allTime = dao.getTotalStudyMinutes();
+        int streak = dao.getCurrentStudyStreak();
+        int completionPercent = total == 0 ? 0 : completed * 100 / total;
+
+        HBox stats = new HBox(14);
+        stats.getStyleClass().add("stats-row");
+        stats.getChildren().addAll(
+            statCard("Tasks completed", new Label(completed + " / " + total)),
+            statCard("Completion rate", new Label(completionPercent + "%")),
+            statCard("Study streak", new Label(streak + (streak == 1 ? " day" : " days")))
+        );
+
+        HBox studySummary = new HBox(14);
+        studySummary.getStyleClass().add("stats-row");
+        studySummary.getChildren().addAll(
+            statCard("Study today", new Label(formatDuration(today))),
+            statCard("All-time study", new Label(formatDuration(allTime)))
+        );
+
+        LocalDate todayDate = LocalDate.now();
+        LocalDate startDate = todayDate.minusDays(6);
+        Map<LocalDate, Integer> minutesByDay = dao.getStudyMinutesByDate(startDate, todayDate);
+        CategoryAxis xAxis = new CategoryAxis();
+        NumberAxis yAxis = new NumberAxis();
+        yAxis.setLabel("Minutes");
+        BarChart<String, Number> chart = new BarChart<>(xAxis, yAxis);
+        chart.setLegendVisible(false);
+        chart.setAnimated(false);
+        chart.setCategoryGap(22);
+        chart.setBarGap(4);
+        chart.setPrefHeight(310);
+        chart.setMinHeight(260);
+        chart.getStyleClass().add("weekly-chart");
+
+        XYChart.Series<String, Number> series = new XYChart.Series<>();
+        for (LocalDate day = startDate; !day.isAfter(todayDate); day = day.plusDays(1)) {
+            String label = day.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.getDefault());
+            series.getData().add(new XYChart.Data<>(label, minutesByDay.getOrDefault(day, 0)));
+        }
+        chart.getData().add(series);
+
+        VBox chartCard = new VBox(14);
+        chartCard.setPadding(new Insets(20));
+        chartCard.getStyleClass().add("content-card");
+        Label chartTitle = new Label("Study time · last 7 days");
+        chartTitle.getStyleClass().add("card-title");
+        chartCard.getChildren().addAll(chartTitle, chart);
+        VBox.setVgrow(chart, Priority.ALWAYS);
+
+        page.getChildren().addAll(stats, studySummary, chartCard);
+        return wrapPage(page);
+    }
+
+    private VBox wrapPage(VBox page) {
+        ScrollPane scroll = new ScrollPane(page);
+        scroll.setFitToWidth(true);
+        scroll.getStyleClass().add("dashboard-scroll");
+
+        VBox wrapper = new VBox(scroll);
+        VBox.setVgrow(scroll, Priority.ALWAYS);
+        return wrapper;
+    }
+
+    private VBox createPageFrame(String title, String description) {
+        VBox page = new VBox(20);
+        page.setPadding(new Insets(34, 36, 36, 36));
+        page.getStyleClass().add("dashboard-content");
 
         Label heading = new Label(title);
-        heading.setTextFill(Color.LIGHTGRAY);
+        heading.getStyleClass().add("page-title");
+        Label subtitle = new Label(description);
+        subtitle.getStyleClass().add("page-description");
+        VBox header = new VBox(6, heading, subtitle);
+        header.getStyleClass().add("page-header");
+        page.getChildren().add(header);
+        return page;
+    }
 
-        value.setFont(Font.font("Arial", 26));
-        value.setTextFill(Color.web(color));
+    private String formatDuration(int minutes) {
+        int hours = minutes / 60;
+        int remainingMinutes = minutes % 60;
+        if (hours == 0) {
+            return remainingMinutes + " min";
+        }
+        return remainingMinutes == 0
+            ? hours + " hr"
+            : hours + " hr " + remainingMinutes + " min";
+    }
+
+    private VBox statCard(String title, Label value) {
+        VBox card = new VBox(12);
+        card.setPadding(new Insets(18, 20, 18, 20));
+        card.getStyleClass().add("stat-card");
+
+        Label heading = new Label(title);
+        heading.getStyleClass().add("stat-title");
+
+        value.getStyleClass().add("stat-value");
 
         card.getChildren().addAll(heading, value);
         HBox.setHgrow(card, Priority.ALWAYS);
@@ -208,42 +378,46 @@ public class FocusFlowApp extends Application {
     }
 
     private VBox createTimerCard() {
-        VBox card = new VBox(15);
-        card.setAlignment(Pos.CENTER);
-        card.setPadding(new Insets(25));
-        card.setStyle("""
-            -fx-background-color: #24223B;
-            -fx-background-radius: 16;
-        """);
+        VBox card = new VBox(18);
+        card.setPadding(new Insets(22, 24, 22, 24));
+        card.getStyleClass().add("timer-card");
 
-        modeLabel = new Label("FOCUS SESSION");
-        modeLabel.setTextFill(Color.web("#A78BFA"));
-        modeLabel.setFont(Font.font("Arial", 15));
+        modeLabel = new Label(focusMode ? "FOCUS SESSION" : "BREAK TIME");
+        modeLabel.getStyleClass().add("timer-mode");
 
-        timerLabel = new Label("25:00");
-        timerLabel.setTextFill(Color.WHITE);
-        timerLabel.setFont(Font.font("Arial", 55));
+        timerLabel = new Label();
+        updateTimerDisplay();
+        timerLabel.getStyleClass().add("timer-value");
 
         Label info = new Label("Stay concentrated and complete your work.");
-        info.setTextFill(Color.LIGHTGRAY);
+        info.getStyleClass().add("timer-description");
+        VBox timerInfo = new VBox(8, modeLabel, info);
+        timerInfo.setAlignment(Pos.CENTER_LEFT);
 
         HBox controls = new HBox(12);
         controls.setAlignment(Pos.CENTER);
 
-        startButton = new Button("Start Focus");
+        startButton = new Button(
+            running ? "Pause" : focusMode ? "Start Focus" : "Start Break"
+        );
         Button resetButton = new Button("Reset");
         Button switchButton = new Button("Switch Mode");
 
         styleActionButton(startButton);
-        styleActionButton(resetButton);
-        styleActionButton(switchButton);
+        resetButton.getStyleClass().add("button-secondary");
+        switchButton.getStyleClass().add("button-secondary");
 
         startButton.setOnAction(e -> toggleTimer());
         resetButton.setOnAction(e -> resetTimer());
         switchButton.setOnAction(e -> switchMode());
 
         controls.getChildren().addAll(startButton, resetButton, switchButton);
-        card.getChildren().addAll(modeLabel, timerLabel, info, controls);
+        HBox timerLayout = new HBox(18, timerInfo, timerLabel, controls);
+        timerLayout.setAlignment(Pos.CENTER_LEFT);
+        HBox.setHgrow(timerInfo, Priority.ALWAYS);
+        HBox.setHgrow(timerLabel, Priority.ALWAYS);
+        timerLabel.setAlignment(Pos.CENTER);
+        card.getChildren().add(timerLayout);
 
         return card;
     }
@@ -280,15 +454,18 @@ public class FocusFlowApp extends Application {
         running = false;
 
         if (focusMode) {
-            dao.saveSession(FOCUS_MINUTES);
-            new Alert(Alert.AlertType.INFORMATION,
-                "Great job! You completed a 25-minute focus session.")
-                .show();
-            refreshDashboard();
+            try {
+                dao.saveSession(FOCUS_MINUTES);
+                refreshDashboard();
+                showDesktopNotification(
+                    "Focus session complete",
+                    "Great work. Your 25-minute focus session has been recorded."
+                );
+            } catch (IllegalStateException e) {
+                showDatabaseError(e);
+            }
         } else {
-            new Alert(Alert.AlertType.INFORMATION,
-                "Break completed! Ready to focus again?")
-                .show();
+            showDesktopNotification("Break complete", "Ready to focus again?");
         }
 
         switchMode();
@@ -325,20 +502,17 @@ public class FocusFlowApp extends Application {
         timerLabel.setText(String.format("%02d:%02d", minutes, seconds));
     }
 
-    private VBox createTasksCard() {
+    private VBox createTasksCard(int scrollHeight) {
         VBox card = new VBox(15);
         card.setPadding(new Insets(20));
-        card.setStyle("""
-            -fx-background-color: #1C2030;
-            -fx-background-radius: 14;
-        """);
+        card.getStyleClass().add("content-card");
 
         Label title = new Label("My Tasks");
-        title.setFont(Font.font("Arial", 19));
-        title.setTextFill(Color.WHITE);
+        title.getStyleClass().add("card-title");
 
         Button addButton = new Button("+ Add Task");
         styleActionButton(addButton);
+        addButton.getStyleClass().add("button-compact");
         addButton.setOnAction(e -> addTaskDialog());
 
         HBox heading = new HBox();
@@ -351,12 +525,9 @@ public class FocusFlowApp extends Application {
 
         ScrollPane taskScroll = new ScrollPane(taskContainer);
         taskScroll.setFitToWidth(true);
-        taskScroll.setPrefHeight(220);
-        taskScroll.setStyle("""
-            -fx-background: #1C2030;
-            -fx-background-color: transparent;
-            -fx-border-color: transparent;
-        """);
+        taskScroll.setPrefHeight(scrollHeight);
+        taskScroll.getStyleClass().add("task-scroll");
+        VBox.setVgrow(taskScroll, Priority.ALWAYS);
 
         card.getChildren().addAll(heading, taskScroll);
         refreshTasks();
@@ -383,6 +554,11 @@ public class FocusFlowApp extends Application {
         );
 
         form.setPadding(new Insets(15));
+        dialog.getDialogPane().getStylesheets().add(
+            getClass().getResource("/style.css").toExternalForm()
+        );
+        titleField.getStyleClass().add("text-input");
+        priorityBox.getStyleClass().add("text-input");
 
         dialog.getDialogPane().setContent(form);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
@@ -390,10 +566,22 @@ public class FocusFlowApp extends Application {
         dialog.showAndWait().ifPresent(result -> {
             String title = titleField.getText().trim();
 
-            if (result == ButtonType.OK && !title.isEmpty()) {
+            if (result != ButtonType.OK) {
+                return;
+            }
+            if (title.isEmpty()) {
+                Alert alert = new Alert(Alert.AlertType.WARNING);
+                alert.setTitle("Add task");
+                alert.setHeaderText("A task name is required");
+                alert.setContentText("Enter a name before saving the task.");
+                alert.show();
+                return;
+            }
+
+            runDatabaseAction(() -> {
                 dao.addTask(title, priorityBox.getValue());
                 refreshDashboard();
-            }
+            });
         });
     }
 
@@ -404,17 +592,18 @@ public class FocusFlowApp extends Application {
 
         for (Task task : dao.getAllTasks()) {
             Label taskName = new Label(task.getTitle());
-            taskName.setTextFill(task.isCompleted() ? Color.GRAY : Color.WHITE);
+            taskName.getStyleClass().add("task-name");
 
             if (task.isCompleted()) {
-                taskName.setStyle("-fx-strikethrough: true;");
+                taskName.getStyleClass().add("task-name-completed");
             }
 
             Label priority = new Label(task.getPriority());
-            priority.setTextFill(switch (task.getPriority()) {
-                case "High" -> Color.SALMON;
-                case "Medium" -> Color.GOLD;
-                default -> Color.LIGHTGREEN;
+            priority.getStyleClass().add("priority-badge");
+            priority.getStyleClass().add(switch (task.getPriority()) {
+                case "High" -> "priority-high";
+                case "Medium" -> "priority-medium";
+                default -> "priority-low";
             });
 
             Button complete = new Button(task.isCompleted() ? "Done" : "✓");
@@ -425,32 +614,34 @@ public class FocusFlowApp extends Application {
             styleSmallButton(delete);
 
             complete.setOnAction(e -> {
-                dao.completeTask(task.getId());
-                refreshDashboard();
+                runDatabaseAction(() -> {
+                    dao.completeTask(task.getId());
+                    refreshDashboard();
+                });
             });
 
             delete.setOnAction(e -> {
-                dao.deleteTask(task.getId());
-                refreshDashboard();
+                runDatabaseAction(() -> {
+                    dao.deleteTask(task.getId());
+                    refreshDashboard();
+                });
             });
 
             Region spacer = new Region();
             HBox.setHgrow(spacer, Priority.ALWAYS);
-
             HBox row = new HBox(10, taskName, spacer, priority, complete, delete);
             row.setAlignment(Pos.CENTER_LEFT);
-            row.setPadding(new Insets(10));
-            row.setStyle("""
-                -fx-background-color: #292E40;
-                -fx-background-radius: 8;
-            """);
+            row.setPadding(new Insets(10, 12, 10, 12));
+            row.getStyleClass().add("task-row");
+            HBox.setHgrow(taskName, Priority.ALWAYS);
+            taskName.setMaxWidth(Double.MAX_VALUE);
 
             taskContainer.getChildren().add(row);
         }
 
         if (taskContainer.getChildren().isEmpty()) {
             Label empty = new Label("No tasks yet. Add your first task!");
-            empty.setTextFill(Color.LIGHTGRAY);
+            empty.getStyleClass().add("empty-state");
             taskContainer.getChildren().add(empty);
         }
     }
@@ -458,50 +649,25 @@ public class FocusFlowApp extends Application {
     private VBox createGoalCard() {
         VBox card = new VBox(15);
         card.setPadding(new Insets(20));
-        card.setStyle("""
-            -fx-background-color: #1C2030;
-            -fx-background-radius: 14;
-        """);
+        card.getStyleClass().add("content-card");
 
         Label heading = new Label("Daily Study Goal");
-        heading.setFont(Font.font("Arial", 19));
-        heading.setTextFill(Color.WHITE);
+        heading.getStyleClass().add("card-title");
 
         progressLabel = new Label("0 / 120 minutes");
-        progressLabel.setTextFill(Color.LIGHTGRAY);
+        progressLabel.getStyleClass().add("progress-label");
 
         goalProgress = new ProgressBar(0);
         goalProgress.setMaxWidth(Double.MAX_VALUE);
         goalProgress.setPrefHeight(15);
+        goalProgress.getStyleClass().add("goal-progress");
 
         Label tip = new Label("Consistency is the key to success!");
-        tip.setTextFill(Color.web("#A78BFA"));
+        tip.getStyleClass().add("goal-tip");
         tip.setWrapText(true);
 
         card.getChildren().addAll(heading, progressLabel, goalProgress, tip);
         return card;
-    }
-
-    private void showAnalytics() {
-        int total = dao.getTotalTasks();
-        int completed = dao.getCompletedTasks();
-        int today = dao.getTodayStudyMinutes();
-        int allTime = dao.getTotalStudyMinutes();
-
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle("FocusFlow Analytics");
-        alert.setHeaderText("Your Productivity Report");
-
-        alert.setContentText(
-            "Total Tasks: " + total +
-            "\nCompleted Tasks: " + completed +
-            "\nPending Tasks: " + (total - completed) +
-            "\nToday's Study: " + today + " minutes" +
-            "\nAll-Time Study: " + allTime + " minutes" +
-            "\nDaily Goal: " + DAILY_GOAL + " minutes"
-        );
-
-        alert.showAndWait();
     }
 
     private void refreshDashboard() {
@@ -532,33 +698,83 @@ public class FocusFlowApp extends Application {
     }
 
     private void styleActionButton(Button button) {
-        button.setStyle("""
-            -fx-background-color: #7C3AED;
-            -fx-text-fill: white;
-            -fx-background-radius: 8;
-            -fx-padding: 10 17;
-            -fx-cursor: hand;
-            -fx-font-weight: bold;
-        """);
+        button.getStyleClass().add("button-primary");
     }
 
     private void styleSmallButton(Button button) {
-        button.setStyle("""
-            -fx-background-color: #383E54;
-            -fx-text-fill: white;
-            -fx-background-radius: 6;
-            -fx-cursor: hand;
-        """);
+        button.getStyleClass().add("button-icon");
     }
 
-    private void showMessage(String message) {
-        new Alert(Alert.AlertType.INFORMATION, message).show();
+    private void runDatabaseAction(Runnable action) {
+        try {
+            action.run();
+        } catch (IllegalStateException e) {
+            showDatabaseError(e);
+        }
+    }
+
+    private void showDatabaseError(IllegalStateException error) {
+        Alert alert = new Alert(Alert.AlertType.ERROR);
+        alert.setTitle("FocusFlow");
+        alert.setHeaderText("Your data could not be updated");
+        alert.setContentText(error.getMessage());
+        alert.show();
+    }
+
+    private void initializeDesktopNotifications() {
+        try {
+            if (!SystemTray.isSupported()) {
+                return;
+            }
+
+            BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D graphics = image.createGraphics();
+            try {
+                graphics.setColor(Color.WHITE);
+                graphics.fillRoundRect(1, 1, 14, 14, 4, 4);
+                graphics.setColor(new Color(9, 9, 11));
+                graphics.drawString("F", 5, 12);
+            } finally {
+                graphics.dispose();
+            }
+
+            TrayIcon icon = new TrayIcon(image, "FocusFlow");
+            icon.setImageAutoSize(true);
+            SystemTray.getSystemTray().add(icon);
+            trayIcon = icon;
+        } catch (AWTException | HeadlessException | SecurityException e) {
+            System.err.println("Desktop notifications are unavailable: " + e.getMessage());
+        }
+    }
+
+    private void showDesktopNotification(String title, String message) {
+        if (trayIcon != null) {
+            try {
+                trayIcon.displayMessage(title, message, TrayIcon.MessageType.INFO);
+                return;
+            } catch (HeadlessException | SecurityException e) {
+                System.err.println("Could not display a desktop notification: " + e.getMessage());
+            }
+        }
+
+        Alert alert = new Alert(Alert.AlertType.INFORMATION);
+        alert.setTitle(title);
+        alert.setHeaderText(title);
+        alert.setContentText(message);
+        alert.show();
     }
 
     @Override
     public void stop() {
         if (timeline != null) {
             timeline.stop();
+        }
+        if (trayIcon != null) {
+            try {
+                SystemTray.getSystemTray().remove(trayIcon);
+            } catch (HeadlessException | SecurityException e) {
+                System.err.println("Could not remove the FocusFlow notification icon: " + e.getMessage());
+            }
         }
     }
 
