@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/focusflow-icon.svg" alt="FocusFlow app icon" width="72">
+
 # FocusFlow
 
 **Plan your study. Protect your focus. See your progress.**
