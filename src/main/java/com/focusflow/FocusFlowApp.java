@@ -5,7 +5,11 @@ import javafx.animation.Timeline;
 import javafx.application.Application;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.scene.Cursor;
 import javafx.scene.Scene;
+import javafx.scene.SnapshotParameters;
+import javafx.scene.canvas.Canvas;
+import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.chart.BarChart;
 import javafx.scene.chart.CategoryAxis;
 import javafx.scene.chart.NumberAxis;
@@ -19,16 +23,19 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.TextField;
+import javafx.scene.input.MouseEvent;
+import javafx.scene.image.WritableImage;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.scene.paint.Color;
 import javafx.stage.Stage;
+import javafx.stage.StageStyle;
 import javafx.util.Duration;
 
 import java.awt.AWTException;
-import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.HeadlessException;
 import java.awt.SystemTray;
@@ -45,6 +52,7 @@ public class FocusFlowApp extends Application {
     private final TaskDAO dao = new TaskDAO();
 
     private BorderPane root;
+    private Stage stage;
     private Button activeNavButton;
     private Label totalTasksLabel;
     private Label completedLabel;
@@ -62,7 +70,23 @@ public class FocusFlowApp extends Application {
     private boolean focusMode = true;
 
     private Button startButton;
+    private Button maximizeButton;
     private TrayIcon trayIcon;
+    private boolean resizingLeft;
+    private boolean resizingRight;
+    private boolean resizingTop;
+    private boolean resizingBottom;
+    private double resizeStartScreenX;
+    private double resizeStartScreenY;
+    private double resizeStartX;
+    private double resizeStartY;
+    private double resizeStartWidth;
+    private double resizeStartHeight;
+    private double dragStartScreenX;
+    private double dragStartScreenY;
+    private double dragStartX;
+    private double dragStartY;
+    private boolean draggingWindow;
 
     private static final int FOCUS_MINUTES = 25;
     private static final int BREAK_MINUTES = 5;
@@ -71,19 +95,27 @@ public class FocusFlowApp extends Application {
     @Override
     public void start(Stage stage) {
         Database.initialize();
+        this.stage = stage;
 
         root = new BorderPane();
         root.getStyleClass().add("app-shell");
         root.setLeft(createSidebar());
         root.setCenter(createDashboard());
 
-        Scene scene = new Scene(root, 1100, 750);
+        VBox window = new VBox(createTitleBar(), root);
+        window.getStyleClass().add("window-frame");
+        VBox.setVgrow(root, Priority.ALWAYS);
+
+        stage.initStyle(StageStyle.UNDECORATED);
+        Scene scene = new Scene(window, 1100, 750);
         scene.getStylesheets().add(getClass().getResource("/style.css").toExternalForm());
 
         stage.setTitle("FocusFlow - Productivity Tracker");
         stage.setMinWidth(1000);
         stage.setMinHeight(680);
+        stage.getIcons().add(createWindowIcon());
         stage.setScene(scene);
+        configureWindowResizing(scene);
         stage.show();
 
         initializeDesktopNotifications();
@@ -97,7 +129,8 @@ public class FocusFlowApp extends Application {
         sidebar.setMinWidth(228);
         sidebar.getStyleClass().add("sidebar");
 
-        Label brandMark = new Label("F");
+        Label brandMark = new Label();
+        brandMark.setGraphic(createLogoGraphic(30));
         brandMark.getStyleClass().add("brand-mark");
         Label logo = new Label("FocusFlow");
         logo.getStyleClass().add("brand-name");
@@ -140,6 +173,198 @@ public class FocusFlowApp extends Application {
         );
 
         return sidebar;
+    }
+
+    private HBox createTitleBar() {
+        Canvas icon = createLogoGraphic(22);
+        Label title = new Label("FocusFlow");
+        title.getStyleClass().add("window-title");
+
+        Region spacer = new Region();
+        HBox.setHgrow(spacer, Priority.ALWAYS);
+
+        Button minimize = windowButton("−", "Minimize");
+        maximizeButton = windowButton("□", "Maximize");
+        Button close = windowButton("×", "Close");
+        close.getStyleClass().add("window-control-close");
+
+        minimize.setOnAction(event -> stage.setIconified(true));
+        maximizeButton.setOnAction(event -> toggleMaximize());
+        close.setOnAction(event -> stage.close());
+
+        HBox controls = new HBox(2, minimize, maximizeButton, close);
+        controls.setAlignment(Pos.CENTER);
+        HBox titleBar = new HBox(9, icon, title, spacer, controls);
+        titleBar.setAlignment(Pos.CENTER_LEFT);
+        titleBar.getStyleClass().add("window-titlebar");
+        titleBar.setOnMousePressed(this::startWindowDrag);
+        titleBar.setOnMouseDragged(this::dragWindow);
+        titleBar.setOnMouseReleased(event -> draggingWindow = false);
+        titleBar.setOnMouseClicked(event -> {
+            if (event.getClickCount() == 2 && !(event.getTarget() instanceof Button)) {
+                toggleMaximize();
+            }
+        });
+        return titleBar;
+    }
+
+    private Button windowButton(String text, String accessibleText) {
+        Button button = new Button(text);
+        button.setAccessibleText(accessibleText);
+        button.getStyleClass().add("window-control");
+        return button;
+    }
+
+    private Canvas createLogoGraphic(double size) {
+        Canvas logo = new Canvas(size, size);
+        GraphicsContext graphics = logo.getGraphicsContext2D();
+        double center = size / 2;
+        double radius = size * 0.24;
+
+        graphics.setFill(Color.web("#09090b"));
+        graphics.fillRoundRect(0, 0, size, size, size * 0.22, size * 0.22);
+        graphics.setStroke(Color.web("#71717a"));
+        graphics.setLineWidth(size * 0.04);
+        graphics.setLineCap(javafx.scene.shape.StrokeLineCap.ROUND);
+        graphics.strokeLine(center, size * 0.21, center, size * 0.28);
+        graphics.strokeLine(center, size * 0.72, center, size * 0.79);
+        graphics.strokeLine(size * 0.79, center, size * 0.72, center);
+        graphics.strokeLine(size * 0.28, center, size * 0.21, center);
+
+        graphics.setStroke(Color.web("#fafafa"));
+        graphics.setLineWidth(size * 0.055);
+        graphics.strokeOval(center - radius, center - radius, radius * 2, radius * 2);
+        graphics.setLineCap(javafx.scene.shape.StrokeLineCap.ROUND);
+        graphics.strokeLine(center, center - radius * 0.55, center, center);
+        graphics.strokeLine(center, center, center + radius * 0.42, center + radius * 0.25);
+        graphics.setFill(Color.web("#fafafa"));
+        graphics.fillOval(center - size * 0.035, center - size * 0.035, size * 0.07, size * 0.07);
+        return logo;
+    }
+
+    private WritableImage createWindowIcon() {
+        Canvas logo = createLogoGraphic(128);
+        return logo.snapshot(new SnapshotParameters(), new WritableImage(128, 128));
+    }
+
+    private void startWindowDrag(MouseEvent event) {
+        draggingWindow = !(event.getTarget() instanceof Button) && !stage.isMaximized();
+        if (!draggingWindow) {
+            return;
+        }
+        dragStartScreenX = event.getScreenX();
+        dragStartScreenY = event.getScreenY();
+        dragStartX = stage.getX();
+        dragStartY = stage.getY();
+    }
+
+    private void dragWindow(MouseEvent event) {
+        if (draggingWindow && !stage.isMaximized() && !isResizingWindow()) {
+            stage.setX(dragStartX + event.getScreenX() - dragStartScreenX);
+            stage.setY(dragStartY + event.getScreenY() - dragStartScreenY);
+        }
+    }
+
+    private void toggleMaximize() {
+        stage.setMaximized(!stage.isMaximized());
+        maximizeButton.setText(stage.isMaximized() ? "❐" : "□");
+        maximizeButton.setAccessibleText(stage.isMaximized() ? "Restore" : "Maximize");
+    }
+
+    private void configureWindowResizing(Scene scene) {
+        scene.addEventFilter(MouseEvent.MOUSE_MOVED, event -> updateResizeCursor(scene, event));
+        scene.addEventFilter(MouseEvent.MOUSE_PRESSED, event -> startWindowResize(scene, event));
+        scene.addEventFilter(MouseEvent.MOUSE_DRAGGED, this::resizeWindow);
+        scene.addEventFilter(MouseEvent.MOUSE_RELEASED, event -> stopWindowResize(scene));
+    }
+
+    private void updateResizeCursor(Scene scene, MouseEvent event) {
+        if (stage.isMaximized()) {
+            scene.setCursor(Cursor.DEFAULT);
+            return;
+        }
+
+        boolean nearLeft = event.getSceneX() <= 7;
+        boolean nearRight = event.getSceneX() >= scene.getWidth() - 7;
+        boolean nearTop = event.getSceneY() <= 7;
+        boolean nearBottom = event.getSceneY() >= scene.getHeight() - 7;
+        scene.setCursor(resizeCursor(nearLeft, nearRight, nearTop, nearBottom));
+    }
+
+    private Cursor resizeCursor(boolean left, boolean right, boolean top, boolean bottom) {
+        if ((left && top) || (right && bottom)) return Cursor.NW_RESIZE;
+        if ((right && top) || (left && bottom)) return Cursor.NE_RESIZE;
+        if (left) return Cursor.W_RESIZE;
+        if (right) return Cursor.E_RESIZE;
+        if (top) return Cursor.N_RESIZE;
+        if (bottom) return Cursor.S_RESIZE;
+        return Cursor.DEFAULT;
+    }
+
+    private void startWindowResize(Scene scene, MouseEvent event) {
+        if (stage.isMaximized()) {
+            return;
+        }
+
+        resizingLeft = event.getSceneX() <= 7;
+        resizingRight = event.getSceneX() >= scene.getWidth() - 7;
+        resizingTop = event.getSceneY() <= 7;
+        resizingBottom = event.getSceneY() >= scene.getHeight() - 7;
+        if (!isResizingWindow()) {
+            return;
+        }
+
+        resizeStartScreenX = event.getScreenX();
+        resizeStartScreenY = event.getScreenY();
+        resizeStartX = stage.getX();
+        resizeStartY = stage.getY();
+        resizeStartWidth = stage.getWidth();
+        resizeStartHeight = stage.getHeight();
+        event.consume();
+    }
+
+    private void resizeWindow(MouseEvent event) {
+        if (!isResizingWindow()) {
+            return;
+        }
+
+        double deltaX = event.getScreenX() - resizeStartScreenX;
+        double deltaY = event.getScreenY() - resizeStartScreenY;
+        resizeWindowHorizontally(deltaX);
+        resizeWindowVertically(deltaY);
+        event.consume();
+    }
+
+    private void resizeWindowHorizontally(double deltaX) {
+        if (resizingLeft) {
+            double width = Math.max(stage.getMinWidth(), resizeStartWidth - deltaX);
+            stage.setX(resizeStartX + resizeStartWidth - width);
+            stage.setWidth(width);
+        } else if (resizingRight) {
+            stage.setWidth(Math.max(stage.getMinWidth(), resizeStartWidth + deltaX));
+        }
+    }
+
+    private void resizeWindowVertically(double deltaY) {
+        if (resizingTop) {
+            double height = Math.max(stage.getMinHeight(), resizeStartHeight - deltaY);
+            stage.setY(resizeStartY + resizeStartHeight - height);
+            stage.setHeight(height);
+        } else if (resizingBottom) {
+            stage.setHeight(Math.max(stage.getMinHeight(), resizeStartHeight + deltaY));
+        }
+    }
+
+    private boolean isResizingWindow() {
+        return resizingLeft || resizingRight || resizingTop || resizingBottom;
+    }
+
+    private void stopWindowResize(Scene scene) {
+        resizingLeft = false;
+        resizingRight = false;
+        resizingTop = false;
+        resizingBottom = false;
+        scene.setCursor(Cursor.DEFAULT);
     }
 
     private Button navButton(String text) {
@@ -730,9 +955,9 @@ public class FocusFlowApp extends Application {
             BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
             Graphics2D graphics = image.createGraphics();
             try {
-                graphics.setColor(Color.WHITE);
+                graphics.setColor(java.awt.Color.WHITE);
                 graphics.fillRoundRect(1, 1, 14, 14, 4, 4);
-                graphics.setColor(new Color(9, 9, 11));
+                graphics.setColor(new java.awt.Color(9, 9, 11));
                 graphics.drawString("F", 5, 12);
             } finally {
                 graphics.dispose();

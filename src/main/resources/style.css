@@ -15,6 +15,47 @@
     -fx-background-color: #09090b;
 }
 
+.window-frame {
+    -fx-background-color: #09090b;
+    -fx-border-color: #27272a;
+    -fx-border-width: 1;
+}
+
+.window-titlebar {
+    -fx-min-height: 42px;
+    -fx-pref-height: 42px;
+    -fx-padding: 0 8 0 13;
+    -fx-background-color: #09090b;
+    -fx-border-color: transparent transparent #242427 transparent;
+    -fx-border-width: 0 0 1 0;
+}
+
+.window-title {
+    -fx-text-fill: #d4d4d8;
+    -fx-font-size: 12px;
+}
+
+.window-control {
+    -fx-min-width: 42px;
+    -fx-min-height: 30px;
+    -fx-background-color: transparent;
+    -fx-background-radius: 5;
+    -fx-padding: 0;
+    -fx-text-fill: #a1a1aa;
+    -fx-font-size: 15px;
+    -fx-font-weight: normal;
+}
+
+.window-control:hover {
+    -fx-background-color: #27272a;
+    -fx-text-fill: #fafafa;
+}
+
+.window-control-close:hover {
+    -fx-background-color: #dc2626;
+    -fx-text-fill: #ffffff;
+}
+
 .sidebar {
     -fx-background-color: #09090b;
     -fx-border-color: transparent #242427 transparent transparent;
@@ -24,12 +65,8 @@
 .brand-mark {
     -fx-min-width: 30px;
     -fx-min-height: 30px;
-    -fx-alignment: center;
-    -fx-background-color: #ededed;
-    -fx-background-radius: 7;
-    -fx-text-fill: #09090b;
-    -fx-font-size: 17px;
-    -fx-font-weight: bold;
+    -fx-padding: 0;
+    -fx-background-color: transparent;
 }
 
 .brand-name {
